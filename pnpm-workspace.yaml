@@ -1,0 +1,7 @@
+# Solo estos paquetes pueden ejecutar scripts de instalación.
+allowBuilds:
+  esbuild: true
+onlyBuiltDependencies:
+  - esbuild
+# Solo instala versiones con más de 3 días de publicadas (en minutos).
+minimumReleaseAge: 4320
