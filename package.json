@@ -1,5 +1,5 @@
 {
-  "name": "inspector-valpo",
+  "name": "inspector-municipal",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "build:pages": "VITE_BASE=/inspector-valpo/ pnpm build",
+    "build:pages": "VITE_BASE=/inspector-municipal/ pnpm build",
     "lint:types": "tsc --noEmit"
   },
   "dependencies": {
