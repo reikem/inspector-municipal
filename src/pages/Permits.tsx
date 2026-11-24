@@ -4,7 +4,7 @@ import { Card, StatusBadge, go, useHash } from '../components/ui';
 import PermitDetail from '../components/PermitDetail';
 import { getState, saveSettings, startSync, stopSync, toast, useStore } from '../store';
 import { fetchPermit, STATUS_LABEL, statusOf } from '../services/permitsApi';
-import { getAllCachedPermits, isMonthlyRefreshWindow, saveCachedPermits } from '../services/permitCache';
+import { isMonthlyRefreshWindow, saveCachedPermits, useActivePermits } from '../services/permitCache';
 import { clp, maskRut, fullRut } from '../services/stats';
 import { config } from '../config';
 import type { Permit, PermitStatus } from '../types';
@@ -12,50 +12,17 @@ import type { Permit, PermitStatus } from '../types';
 export default function Permits() {
   const { query } = useHash();
   const storePermits = useStore((s) => s.permits);
+  const permits = useActivePermits();
   const full = useStore((s) => s.settings.showFullRut);
-  const [cachedMap, setCachedMap] = useState<Map<number, Permit>>(() => new Map());
   const [sel, setSel] = useState<Permit | null>(null);
 
   useEffect(() => {
-    void getAllCachedPermits()
-      .then((list) => {
-        if (!list.length) return;
-        setCachedMap(new Map(list.map((p) => [p.numeroArriendo, p])));
-      })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
     const apiPermits = storePermits.filter((p) => p.source === 'api');
-    if (!apiPermits.length) return;
-    void saveCachedPermits(apiPermits).catch(() => {});
-    setCachedMap((prev: Map<number, Permit>) => {
-      const next = new Map(prev);
-      for (const p of apiPermits) next.set(p.numeroArriendo, p);
-      return next;
-    });
+    if (apiPermits.length) void saveCachedPermits(apiPermits).catch(() => {});
   }, [storePermits]);
 
-  const permits = useMemo(() => {
-    const map = new Map<number, Permit>();
-    for (const p of storePermits) {
-      if (p.source !== 'demo' || cachedMap.size === 0) map.set(p.numeroArriendo, p);
-    }
-    for (const [k, p] of cachedMap) {
-      const existing = map.get(k);
-      if (!existing || new Date(p.fetchedAt) >= new Date(existing.fetchedAt)) {
-        map.set(k, p);
-      }
-    }
-    return [...map.values()];
-  }, [storePermits, cachedMap]);
-
   const upsertLocalPermit = (permit: Permit) => {
-    setCachedMap((prev: Map<number, Permit>) => {
-      const next = new Map(prev);
-      next.set(permit.numeroArriendo, permit);
-      return next;
-    });
+    void saveCachedPermits([permit]).catch(() => {});
     setSel((curr) => (curr?.numeroArriendo === permit.numeroArriendo ? permit : curr));
   };
 

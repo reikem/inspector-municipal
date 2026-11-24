@@ -1,8 +1,11 @@
+import { useEffect, useState } from 'react';
+import { useStore } from '../store';
 import type { Permit } from '../types';
 
 const DB_NAME = 'inspector_municipal_cache';
 const STORE_NAME = 'permits';
 const DB_VERSION = 1;
+const PERMITS_UPDATED_EVENT = 'inspector:permits-updated';
 
 function openCacheDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -16,6 +19,12 @@ function openCacheDB(): Promise<IDBDatabase> {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+}
+
+export function notifyPermitsUpdated(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent(PERMITS_UPDATED_EVENT));
+  }
 }
 
 export async function getCachedPermit(numeroArriendo: number): Promise<Permit | null> {
@@ -41,13 +50,14 @@ export async function getAllCachedPermits(): Promise<Permit[]> {
 export async function saveCachedPermits(permits: Permit[]): Promise<void> {
   if (!permits.length) return;
   const db = await openCacheDB();
-  return new Promise((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite');
     const store = tx.objectStore(STORE_NAME);
     for (const p of permits) store.put(p);
     tx.oncomplete = () => resolve();
     tx.onerror = () => reject(tx.error);
   });
+  notifyPermitsUpdated();
 }
 
 /** Devuelve true solo si hoy está entre el día 2 y el día 5 del mes (inclusive). */
@@ -72,4 +82,47 @@ export function shouldRevalidatePermit(cached: Permit | null, now: Date = new Da
   const sameMonth =
     fetched.getFullYear() === now.getFullYear() && fetched.getMonth() === now.getMonth();
   return !sameMonth;
+}
+
+/**
+ * Hook reactivo: combina el store y la base local (IndexedDB).
+ * Cuando existen permisos reales ('api'), reemplaza los registros 'demo'
+ * y actualiza automáticamente Dashboard, MapPage y cualquier componente suscrito.
+ */
+export function useActivePermits(): Permit[] {
+  const storePermits = useStore((s) => s.permits);
+  const [cachedPermits, setCachedPermits] = useState<Permit[]>(() => []);
+
+  useEffect(() => {
+    let active = true;
+    const load = () => {
+      void getAllCachedPermits()
+        .then((list) => {
+          if (active) setCachedPermits(list);
+        })
+        .catch(() => {});
+    };
+
+    load();
+    window.addEventListener(PERMITS_UPDATED_EVENT, load);
+    return () => {
+      active = false;
+      window.removeEventListener(PERMITS_UPDATED_EVENT, load);
+    };
+  }, []);
+
+  const merged = new Map<number, Permit>();
+  for (const p of storePermits) {
+    merged.set(p.numeroArriendo, p);
+  }
+  for (const p of cachedPermits) {
+    const prev = merged.get(p.numeroArriendo);
+    if (!prev || new Date(p.fetchedAt) >= new Date(prev.fetchedAt)) {
+      merged.set(p.numeroArriendo, p);
+    }
+  }
+
+  const all = [...merged.values()];
+  const hasRealPermits = all.some((p) => p.source === 'api');
+  return hasRealPermits ? all.filter((p) => p.source !== 'demo') : all;
 }

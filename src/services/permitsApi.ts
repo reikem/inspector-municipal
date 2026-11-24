@@ -71,7 +71,6 @@ export type FetchResult =
 export interface FetchPermitOptions {
   signal?: AbortSignal;
   base?: string;
-  /** Si es true, omite la regla mensual y consulta directamente la API para actualizar ese permiso. */
   force?: boolean;
 }
 
@@ -92,7 +91,7 @@ export async function fetchPermit(
         return { kind: 'found', permit: cached, fromCache: true };
       }
     } catch {
-      // Si IndexedDB falla (ej. modo privado estricto), continúa con fetch normal
+      // Continúa con fetch si IndexedDB no está disponible
     }
   }
 
