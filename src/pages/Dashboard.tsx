@@ -29,16 +29,19 @@ export default function Dashboard() {
 
   const snapshots = useMemo(() => {
     const hasReal = permits.some((p) => p.source === 'api');
-    if (!hasReal && storeSnapshots.length) return storeSnapshots;
-    const today = new Date().toISOString().slice(0, 10);
+    if (!hasReal && storeSnapshots.length > 1) return storeSnapshots;
+    const now = new Date();
+    const yesterday = new Date(now.getTime() - 86_400_000).toISOString().slice(0, 10);
+    const today = now.toISOString().slice(0, 10);
+    const base = !hasReal && storeSnapshots.length === 1 ? storeSnapshots[0] : {
+      alDia: sum.alDia,
+      atrasado: sum.atrasado,
+      desactivado: sum.desactivado,
+      deuda: sum.deuda,
+    };
     return [
-      {
-        date: today,
-        alDia: sum.alDia,
-        atrasado: sum.atrasado,
-        desactivado: sum.desactivado,
-        deuda: sum.deuda,
-      },
+      { date: yesterday, ...base },
+      { date: today, alDia: sum.alDia, atrasado: sum.atrasado, desactivado: sum.desactivado, deuda: sum.deuda },
     ];
   }, [permits, storeSnapshots, sum]);
 
@@ -85,9 +88,9 @@ export default function Dashboard() {
         title="Mapa de calor: dónde hay más atrasos"
         actions={
           <div className="seg" role="group" aria-label="Métrica del mapa">
-            <button className={metric === 'atrasos' ? 'on' : ''} onClick={() => setMetric('atrasos')}>Cantidad de atrasos</button>
-            <button className={metric === 'deuda' ? 'on' : ''} onClick={() => setMetric('deuda')}>Monto de la deuda</button>
-            <button className="btn btn--ghost btn--small" onClick={() => go('/mapa')}>Abrir mapa</button>
+            <button type="button" className={metric === 'atrasos' ? 'on' : ''} onClick={() => setMetric('atrasos')}>Cantidad de atrasos</button>
+            <button type="button" className={metric === 'deuda' ? 'on' : ''} onClick={() => setMetric('deuda')}>Monto de la deuda</button>
+            <button type="button" className="btn btn--ghost btn--small" onClick={() => go('/mapa')}>Abrir mapa</button>
           </div>
         }
       >
@@ -109,7 +112,7 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <Card title="Mayores deudas" actions={<button className="btn btn--ghost btn--small" onClick={() => go('/permisos?estado=atrasado')}>Ver todos</button>}>
+      <Card title="Mayores deudas" actions={<button type="button" className="btn btn--ghost btn--small" onClick={() => go('/permisos?estado=atrasado')}>Ver todos</button>}>
         <div className="tablewrap">
           <table className="table">
             <thead><tr><th>N.º</th><th>Titular</th><th>Calle</th><th className="num">Deuda</th><th>Estado</th><th /></tr></thead>
@@ -121,7 +124,7 @@ export default function Dashboard() {
                   <td>{p.calle}</td>
                   <td className="num">{clp(p.deuda)}</td>
                   <td><StatusBadge status="atrasado" /></td>
-                  <td><button className="btn btn--small" onClick={() => go(`/inspeccion?n=${p.numeroArriendo}`)}>Inspeccionar</button></td>
+                  <td><button type="button" className="btn btn--small" onClick={() => go(`/inspeccion?n=${p.numeroArriendo}`)}>Inspeccionar</button></td>
                 </tr>
               ))}
             </tbody>

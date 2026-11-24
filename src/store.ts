@@ -5,6 +5,7 @@ import { RULES } from './data/rules';
 import { createRepository } from './repository';
 import { fetchUtm } from './services/utm';
 import { statusOf, syncRange } from './services/permitsApi';
+import { notifyPermitsUpdated, saveCachedPermits } from './services/permitCache';
 import { newCode } from './services/verify';
 import { summarize } from './services/stats';
 import type { CheckValue, Fine, FineItem, Inspection, Outcome, Permit, Settings, Snapshot, SyncState } from './types';
@@ -30,7 +31,11 @@ const initial: State = {
 };
 let state = initial;
 const listeners = new Set<() => void>();
-const set = (patch: Partial<State>) => { state = { ...state, ...patch }; listeners.forEach((l) => l()); };
+const set = (patch: Partial<State>) => {
+  state = { ...state, ...patch };
+  listeners.forEach((l) => l());
+  if ('permits' in patch) notifyPermitsUpdated();
+};
 export const useStore = <T,>(sel: (s: State) => T): T => useSyncExternalStore((cb) => { listeners.add(cb); return () => listeners.delete(cb); }, () => sel(state));
 export const getState = () => state;
 export const toast = (m: string) => { set({ toast: m }); setTimeout(() => { if (state.toast === m) set({ toast: '' }); }, 3500); };
@@ -50,6 +55,8 @@ export async function boot() {
     inspections = demo.inspections; fines = demo.fines;
     await repo.replaceAll({ permits, inspections, fines, snapshots });
   }
+  const realPermits = permits.filter((p) => p.source === 'api');
+  if (realPermits.length) await saveCachedPermits(realPermits).catch(() => {});
   set({ ready: true, permits, inspections: [...inspections].sort((a, b) => b.finishedAt.localeCompare(a.finishedAt)), fines: [...fines].sort((a, b) => b.issuedAt.localeCompare(a.issuedAt)), snapshots, settings });
   fetchUtm().then((u) => saveSettings({ ...state.settings, utmValue: u.value, utmDate: u.date })).catch(() => undefined);
 }
@@ -69,12 +76,14 @@ export async function startSync() {
   set({ sync: { running: true, current: cfg.from, from: cfg.from, to: cfg.to, found: 0, missing: 0, errors: 0, message: 'Consultando…' } });
   const res = await syncRange(cfg, async (found, p) => {
     await repo.upsertPermits(found);
-    const map = new Map(state.permits.map((x) => [x.numeroArriendo, x]));
+    await saveCachedPermits(found).catch(() => {});
+    const map = new Map(state.permits.filter((x) => x.source !== 'demo').map((x) => [x.numeroArriendo, x]));
     found.forEach((x) => map.set(x.numeroArriendo, x));
     set({ permits: [...map.values()], sync: { ...state.sync, ...p, running: true, from: cfg.from, to: cfg.to } });
   }, abort.signal);
   set({ sync: { ...state.sync, ...res, running: false } });
   if (state.permits.length) await takeSnapshot();
+  notifyPermitsUpdated();
   toast(res.message);
 }
 
@@ -151,11 +160,15 @@ export async function importJson(text: string) {
   if (!Array.isArray(d.permits)) throw new Error('Archivo no válido.');
   const all = { permits: d.permits, inspections: d.inspections ?? [], fines: d.fines ?? [], snapshots: d.snapshots ?? [] };
   await repo.replaceAll(all);
+  const realPermits = d.permits.filter((p) => p.source === 'api');
+  if (realPermits.length) await saveCachedPermits(realPermits).catch(() => {});
   set(all);
   toast('Datos importados.');
 }
 
 export async function upsertPermit(p: Permit) {
   await repo.upsertPermits([p]);
-  set({ permits: [...state.permits.filter((x) => x.numeroArriendo !== p.numeroArriendo), p] });
+  if (p.source === 'api') await saveCachedPermits([p]).catch(() => {});
+  set({ permits: [...state.permits.filter((x) => x.numeroArriendo !== p.numeroArriendo && x.source !== 'demo'), p] });
 }
+```[cite: 18, 20]

@@ -3,9 +3,7 @@ import { useEffect, useMemo, useState, type ReactNode } from 'react';
 export interface Column<T> {
   key: string;
   header: string;
-  /** Valor para ordenar y exportar. */
   value: (r: T) => string | number;
-  /** Cómo se dibuja la celda (por defecto, el valor). */
   render?: (r: T) => ReactNode;
   sortable?: boolean;
   num?: boolean;
@@ -20,7 +18,6 @@ interface Props<T> {
   rowKey: (r: T) => string | number;
   search?: { placeholder: string; text: (r: T) => string };
   filters?: Filter<T>[];
-  /** Valores iniciales de los filtros de selección (p. ej. { estado: 'atrasado' }). */
   initialSelects?: Record<string, string>;
   pageSizes?: number[];
   defaultPageSize?: number;
@@ -28,7 +25,6 @@ interface Props<T> {
   exportName?: string;
   empty?: string;
   caption: string;
-  /** Acción opcional para actualizar solo el registro de una fila específica. */
   onRefreshRow?: (r: T) => Promise<void> | void;
 }
 
@@ -65,6 +61,10 @@ export default function DataTable<T>({
   const [jump, setJump] = useState('');
   const [refreshingKey, setRefreshingKey] = useState<string | number | null>(null);
 
+  useEffect(() => {
+    setPage(0);
+  }, [rows.length]);
+
   const filtered = useMemo(() => {
     const term = fold(q.trim());
     const digits = q.replace(/\D/g, '');
@@ -92,7 +92,7 @@ export default function DataTable<T>({
   }, [rows, q, selects, ranges, sort, search, filters, columns]);
 
   const pages = Math.max(1, Math.ceil(filtered.length / size));
-  useEffect(() => { if (page > pages - 1) setPage(pages - 1); }, [page, pages]);
+  useEffect(() => { if (page > pages - 1) setPage(Math.max(0, pages - 1)); }, [page, pages]);
   const start = page * size;
   const slice = filtered.slice(start, start + size);
   const active = Boolean(q) || Object.values(selects).some(Boolean) || Object.values(ranges).some((r) => r.min || r.max);
@@ -135,8 +135,8 @@ export default function DataTable<T>({
             <input type="number" inputMode="numeric" min={0} step={f.step ?? 1} placeholder="mín." aria-label={`${f.label} mínimo`} value={ranges[f.key]?.min ?? ''} onChange={(e) => { setRanges({ ...ranges, [f.key]: { min: e.target.value, max: ranges[f.key]?.max ?? '' } }); reset(); }} />
             <input type="number" inputMode="numeric" min={0} step={f.step ?? 1} placeholder="máx." aria-label={`${f.label} máximo`} value={ranges[f.key]?.max ?? ''} onChange={(e) => { setRanges({ ...ranges, [f.key]: { min: ranges[f.key]?.min ?? '', max: e.target.value } }); reset(); }} />
           </span>))}
-        {active && <button className="btn btn--ghost btn--small" onClick={clear}>Limpiar filtros</button>}
-        {exportName && <button className="btn btn--ghost btn--small dt__csv" onClick={csv} title="Descarga lo que ves filtrado">⬇ CSV ({filtered.length})</button>}
+        {active && <button type="button" className="btn btn--ghost btn--small" onClick={clear}>Limpiar filtros</button>}
+        {exportName && <button type="button" className="btn btn--ghost btn--small dt__csv" onClick={csv} title="Descarga lo que ves filtrado">⬇ CSV ({filtered.length})</button>}
       </div>
 
       <div className="tablewrap">
@@ -146,7 +146,7 @@ export default function DataTable<T>({
             <tr>
               {columns.map((c) => (
                 <th key={c.key} className={c.num ? 'num' : ''} aria-sort={sort?.key === c.key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
-                  {c.sortable ? <button className="dt__sort" onClick={() => toggleSort(c.key)}>{c.header}<span aria-hidden="true">{sort?.key === c.key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕'}</span></button> : c.header}
+                  {c.sortable ? <button type="button" className="dt__sort" onClick={() => toggleSort(c.key)}>{c.header}<span aria-hidden="true">{sort?.key === c.key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕'}</span></button> : c.header}
                 </th>
               ))}
               {onRefreshRow && <th>Actualizar</th>}
@@ -183,14 +183,14 @@ export default function DataTable<T>({
       <div className="dt__foot">
         <span className="muted" role="status">{filtered.length ? `Mostrando ${start + 1}–${Math.min(start + size, filtered.length)} de ${filtered.length.toLocaleString('es-CL')}` : 'Sin resultados'}{active && filtered.length !== rows.length ? ` (de ${rows.length.toLocaleString('es-CL')} en total)` : ''}</span>
         <label className="dt__size">Por página
-          <select value={size} onChange={(e) => { setSize(Number(e.target.value)); reset(); }}>{pageSizes.map((n) => <option key={n}>{n}</option>)}</select>
+          <select value={size} onChange={(e) => { setSize(Number(e.target.value)); reset(); }}>{pageSizes.map((n) => <option key={n} value={n}>{n}</option>)}</select>
         </label>
         <nav className="dt__pager" aria-label="Paginación">
-          <button disabled={page === 0} onClick={() => setPage(0)} aria-label="Primera página">«</button>
-          <button disabled={page === 0} onClick={() => setPage(page - 1)} aria-label="Página anterior">‹</button>
-          {pageList(page, pages).map((n, i) => n === '…' ? <span key={`e${i}`} aria-hidden="true">…</span> : <button key={n} className={n === page ? 'on' : ''} aria-current={n === page ? 'page' : undefined} onClick={() => setPage(n)}>{n + 1}</button>)}
-          <button disabled={page >= pages - 1} onClick={() => setPage(page + 1)} aria-label="Página siguiente">›</button>
-          <button disabled={page >= pages - 1} onClick={() => setPage(pages - 1)} aria-label="Última página">»</button>
+          <button type="button" disabled={page === 0} onClick={() => setPage(0)} aria-label="Primera página">«</button>
+          <button type="button" disabled={page === 0} onClick={() => setPage(page - 1)} aria-label="Página anterior">‹</button>
+          {pageList(page, pages).map((n, i) => n === '…' ? <span key={`e${i}`} aria-hidden="true">…</span> : <button type="button" key={n} className={n === page ? 'on' : ''} aria-current={n === page ? 'page' : undefined} onClick={() => setPage(n)}>{n + 1}</button>)}
+          <button type="button" disabled={page >= pages - 1} onClick={() => setPage(page + 1)} aria-label="Página siguiente">›</button>
+          <button type="button" disabled={page >= pages - 1} onClick={() => setPage(pages - 1)} aria-label="Última página">»</button>
         </nav>
         {pages > 7 && <form className="dt__jump" onSubmit={(e) => { e.preventDefault(); const n = Number(jump); if (n >= 1 && n <= pages) setPage(n - 1); setJump(''); }}>
           <input type="number" min={1} max={pages} placeholder="Ir a…" value={jump} onChange={(e) => setJump(e.target.value)} aria-label="Ir a la página" /></form>}
