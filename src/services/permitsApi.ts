@@ -1,6 +1,11 @@
 import { config } from '../config';
 import type { Permit, PermitStatus, Settings } from '../types';
 import { locate, streetOf } from './geo';
+import {
+  getCachedPermit,
+  saveCachedPermits,
+  shouldRevalidatePermit,
+} from './permitCache';
 
 // ---------- Lectura de la respuesta (JSON o XML) ----------
 const decodeEntities = (s: string): string =>
@@ -58,24 +63,57 @@ export const statusOf = (p: Pick<Permit, 'estado' | 'deuda'>): PermitStatus =>
 export const STATUS_LABEL: Record<PermitStatus, string> = { al_dia: 'Al día', atrasado: 'Atrasado', desactivado: 'Desactivado' };
 
 // ---------- Consulta ----------
-export type FetchResult = { kind: 'found'; permit: Permit } | { kind: 'missing' } | { kind: 'error'; status: number; why: string };
+export type FetchResult =
+  | { kind: 'found'; permit: Permit; fromCache?: boolean }
+  | { kind: 'missing' }
+  | { kind: 'error'; status: number; why: string };
 
-export async function fetchPermit(id: number, signal?: AbortSignal, base: string = config.permitsApi): Promise<FetchResult> {
-  const url = new URL(base);
+export interface FetchPermitOptions {
+  signal?: AbortSignal;
+  base?: string;
+  /** Si es true, omite la regla mensual y consulta directamente la API para actualizar ese permiso. */
+  force?: boolean;
+}
+
+export async function fetchPermit(
+  id: number,
+  signalOrOpts?: AbortSignal | FetchPermitOptions,
+  baseArg: string = config.permitsApi,
+): Promise<FetchResult> {
+  const opts: FetchPermitOptions =
+    signalOrOpts && 'aborted' in signalOrOpts
+      ? { signal: signalOrOpts, base: baseArg, force: false }
+      : { base: baseArg, force: false, ...(signalOrOpts ?? {}) };
+
+  if (!opts.force) {
+    try {
+      const cached = await getCachedPermit(id);
+      if (cached && !shouldRevalidatePermit(cached)) {
+        return { kind: 'found', permit: cached, fromCache: true };
+      }
+    } catch {
+      // Si IndexedDB falla (ej. modo privado estricto), continúa con fetch normal
+    }
+  }
+
+  const url = new URL(opts.base ?? config.permitsApi);
   url.searchParams.set('id', String(id));
   try {
     const timeout = AbortSignal.timeout(10_000);
     const res = await fetch(url, {
       headers: { Accept: 'application/json, application/xml;q=0.9, text/xml;q=0.8' },
       credentials: 'omit', referrerPolicy: 'no-referrer',
-      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      signal: opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout,
     });
     if (res.status === 404) return { kind: 'missing' };
     if (!res.ok) return { kind: 'error', status: res.status, why: `HTTP ${res.status}` };
     const permit = toPermit(parseBody(await res.text()));
-    return permit ? { kind: 'found', permit } : { kind: 'missing' };
+    if (!permit) return { kind: 'missing' };
+
+    await saveCachedPermits([permit]).catch(() => {});
+    return { kind: 'found', permit, fromCache: false };
   } catch (e) {
-    if (signal?.aborted) return { kind: 'error', status: 0, why: 'cancelado' };
+    if (opts.signal?.aborted) return { kind: 'error', status: 0, why: 'cancelado' };
     return { kind: 'error', status: 0, why: `No se pudo leer la respuesta (¿CORS o sin conexión?). Usa un proxy: ${String(e)}` };
   }
 }
@@ -84,11 +122,6 @@ export async function fetchPermit(id: number, signal?: AbortSignal, base: string
 export interface Progress { current: number; found: number; missing: number; errors: number; message: string }
 const sleep = (ms: number, signal?: AbortSignal) => new Promise<void>((r) => { const t = setTimeout(r, ms); signal?.addEventListener('abort', () => { clearTimeout(t); r(); }, { once: true }); });
 
-/**
- * Recorre un rango de N.º de arriendo consultando la API, con cortesía hacia el servidor:
- * pocas consultas en paralelo, pausa entre tandas, retroceso ante errores/429 y corte automático
- * cuando aparecen muchos números seguidos sin permiso (fin de la numeración).
- */
 export async function syncRange(
   s: Settings['sync'],
   onBatch: (found: Permit[], p: Progress) => Promise<void> | void,
@@ -98,21 +131,37 @@ export async function syncRange(
   let misses = 0, delay = s.delayMs;
   for (let id = s.from; id <= s.to && !signal.aborted; ) {
     const ids = Array.from({ length: Math.min(s.concurrency, s.to - id + 1) }, (_, i) => id + i);
-    const results = await Promise.all(ids.map((n) => fetchPermit(n, signal)));
+    const results = await Promise.all(ids.map((n) => fetchPermit(n, { signal })));
     const found: Permit[] = [];
     let rateLimited = false, failed = false;
+    let allFromCache = true;
     results.forEach((r) => {
-      if (r.kind === 'found') { found.push(r.permit); misses = 0; p.found++; }
-      else if (r.kind === 'missing') { misses++; p.missing++; }
-      else { p.errors++; failed = true; if (r.status === 429) rateLimited = true; p.message = r.why; }
+      if (r.kind === 'found') {
+        found.push(r.permit);
+        misses = 0;
+        p.found++;
+        if (!r.fromCache) allFromCache = false;
+      } else if (r.kind === 'missing') {
+        misses++;
+        p.missing++;
+        allFromCache = false;
+      } else {
+        p.errors++;
+        failed = true;
+        allFromCache = false;
+        if (r.status === 429) rateLimited = true;
+        p.message = r.why;
+      }
     });
     id += ids.length;
     p.current = id - 1;
     if (found.length) await onBatch(found, p);
     if (failed && p.errors > 20 && p.found === 0) { p.message = 'Demasiados errores seguidos: revisa CORS/proxy y vuelve a intentar.'; break; }
     if (misses >= s.maxMisses) { p.message = `Fin de la numeración (${misses} números seguidos sin permiso).`; break; }
-    delay = rateLimited ? Math.min(15000, delay * 2 + 1000) : failed ? Math.min(5000, delay * 1.5) : s.delayMs;
-    await sleep(delay, signal);
+    if (!allFromCache) {
+      delay = rateLimited ? Math.min(15000, delay * 2 + 1000) : failed ? Math.min(5000, delay * 1.5) : s.delayMs;
+      await sleep(delay, signal);
+    }
   }
   if (signal.aborted) p.message = 'Pausado por el usuario.';
   else if (!p.message.startsWith('Fin') && !p.message.startsWith('Demasiados')) p.message = 'Recorrido completo.';

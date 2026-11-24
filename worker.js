@@ -10,7 +10,7 @@ function getCorsHeaders(request) {
   return {
     'Access-Control-Allow-Origin': allowOrigin,
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Accept, Content-Type, Authorization, apikey',
     'Vary': 'Origin',
   };
 }
@@ -35,35 +35,18 @@ export default {
     }
 
     if (request.method !== 'GET') {
-      return jsonResponse(request, { error: 'Método no permitido' }, 405);
+      return jsonResponse(request, { error: 'Método no permitido.' }, 405);
     }
 
-    const pathId = url.pathname.match(/^\/(?:api\/)?provisoria\/([a-zA-Z0-9_-]+)$/)?.[1];
-    const queryId = url.searchParams.get('id')?.trim();
+    const pathId = url.pathname.match(/^\/(?:api\/)?provisoria\/(\d{1,10})$/)?.[1];
+    const queryId = url.searchParams.get('id')?.trim() ?? '';
     const rentalId = pathId || queryId;
 
-    if (!rentalId) {
+    if (!/^\d{1,10}$/.test(rentalId)) {
       return jsonResponse(
         request,
-        { code: 'invalid_qr', error: 'Falta el número o identificador del permiso.' },
+        { code: 'invalid_qr', error: 'ID inválido.' },
         400
-      );
-    }
-
-    if (rentalId === 'demo') {
-      return jsonResponse(
-        request,
-        {
-          nombres: 'JUAN PÉREZ GONZÁLEZ',
-          Rut: '12.345.678-9',
-          direccion: 'AV. PEDRO MONTT 1234, VALPARAÍSO',
-          descripcion: 'VENTA DE ARTESANÍA Y MANUALIDADES',
-          NumeroArriendo: 'DEMO-001',
-          metraje: '2x2 m',
-          estado: 'VIGENTE',
-          deuda: 0,
-        },
-        200
       );
     }
 
@@ -110,10 +93,7 @@ export default {
       const upstream = await fetch(targetUrl.toString(), {
         method: 'GET',
         signal: controller.signal,
-        headers: {
-          Accept: 'application/json',
-          ...(env.MUNICIPAL_API_KEY ? { Authorization: `Bearer ${env.MUNICIPAL_API_KEY}` } : {}),
-        },
+        headers: { Accept: 'application/json' },
       });
 
       clearTimeout(timeoutId);
@@ -121,7 +101,7 @@ export default {
       if (upstream.status === 404) {
         return jsonResponse(
           request,
-          { code: 'not_found', error: 'No se encontró el permiso consultado.' },
+          { code: 'not_found', error: 'No encontrado.' },
           404
         );
       }
@@ -129,23 +109,31 @@ export default {
       if (!upstream.ok) {
         return jsonResponse(
           request,
-          { code: 'server', error: 'Error al consultar el sistema municipal.' },
+          { code: 'server', error: 'El sistema municipal no responde.' },
           502
         );
       }
 
-      const body = await upstream.json();
-      const rawData = body?.data && typeof body.data === 'object' ? body.data : body;
+      const body = await upstream.json().catch(() => null);
+      const p = body?.provisoria ?? body?.data ?? body;
+
+      if (!p || typeof p !== 'object' || (!p.NumeroArriendo && !p.Rut && !p.nombres)) {
+        return jsonResponse(
+          request,
+          { code: 'not_found', error: 'No encontrado.' },
+          404
+        );
+      }
 
       const payload = {
-        nombres: rawData.nombres ?? rawData.nombre ?? '',
-        Rut: rawData.Rut ?? rawData.rut ?? '',
-        direccion: rawData.direccion ?? '',
-        descripcion: rawData.descripcion ?? rawData.giro ?? '',
-        NumeroArriendo: rawData.NumeroArriendo ?? rawData.numeroArriendo ?? rentalId,
-        metraje: rawData.metraje ?? '',
-        estado: rawData.estado ?? 'DESCONOCIDO',
-        deuda: Number(rawData.deuda ?? 0),
+        NumeroArriendo: p.NumeroArriendo ?? rentalId,
+        nombres: p.nombres ?? '',
+        Rut: p.Rut ?? '',
+        direccion: p.direccion ?? '',
+        metraje: p.metraje ?? '',
+        descripcion: p.descripcion ?? '',
+        estado: p.estado ?? 'DESCONOCIDO',
+        deuda: Number(p.deuda ?? 0),
       };
 
       const response = jsonResponse(request, payload, 200, {
@@ -163,7 +151,7 @@ export default {
           code: isTimeout ? 'network' : 'server',
           error: isTimeout
             ? 'Tiempo de espera agotado al consultar el sistema municipal.'
-            : 'No fue posible completar la consulta.',
+            : 'El sistema municipal no responde.',
         },
         isTimeout ? 504 : 502
       );

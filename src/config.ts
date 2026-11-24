@@ -4,7 +4,7 @@ export const config = {
   backend: ((import.meta.env.VITE_DATA_BACKEND as string | undefined) || 'memory') as Backend,
   permitsApi:
     (import.meta.env.VITE_PERMITS_API as string | undefined) ||
-    'https://yopagoenvalpo.cl/api/provisorias/provisorias/PorNumeroArriendo',
+    'https://inspector-municipal.jimmymeneses11.workers.dev/api/provisoria',
   supabaseUrl: (import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? '',
   supabaseKey: (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined) ?? '',
   postgresApi: (import.meta.env.VITE_POSTGRES_API as string | undefined) ?? '',

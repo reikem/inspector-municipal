@@ -28,11 +28,12 @@ interface Props<T> {
   exportName?: string;
   empty?: string;
   caption: string;
+  /** Acción opcional para actualizar solo el registro de una fila específica. */
+  onRefreshRow?: (r: T) => Promise<void> | void;
 }
 
 const fold = (s: string) => s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase();
 
-/** Páginas visibles con puntos suspensivos: 1 … 4 5 6 … 20 */
 function pageList(cur: number, total: number): (number | '…')[] {
   const set = new Set([0, total - 1, cur - 1, cur, cur + 1].filter((n) => n >= 0 && n < total));
   const out: (number | '…')[] = [];
@@ -40,11 +41,21 @@ function pageList(cur: number, total: number): (number | '…')[] {
   return out;
 }
 
-/**
- * Tabla reutilizable con búsqueda, filtros (selección y rango), orden por columna,
- * paginación (tamaño configurable) y exportación a CSV de lo filtrado.
- */
-export default function DataTable<T>({ rows, columns, rowKey, search, filters = [], initialSelects = {}, pageSizes = [10, 25, 50, 100], defaultPageSize = 25, defaultSort, exportName, empty = 'No hay resultados con esos filtros.', caption }: Props<T>) {
+export default function DataTable<T>({
+  rows,
+  columns,
+  rowKey,
+  search,
+  filters = [],
+  initialSelects = {},
+  pageSizes = [10, 25, 50, 100],
+  defaultPageSize = 25,
+  defaultSort,
+  exportName,
+  empty = 'No hay resultados con esos filtros.',
+  caption,
+  onRefreshRow,
+}: Props<T>) {
   const [q, setQ] = useState('');
   const [selects, setSelects] = useState<Record<string, string>>(initialSelects);
   const [ranges, setRanges] = useState<Record<string, { min: string; max: string }>>({});
@@ -52,6 +63,7 @@ export default function DataTable<T>({ rows, columns, rowKey, search, filters = 
   const [size, setSize] = useState(defaultPageSize);
   const [page, setPage] = useState(0);
   const [jump, setJump] = useState('');
+  const [refreshingKey, setRefreshingKey] = useState<string | number | null>(null);
 
   const filtered = useMemo(() => {
     const term = fold(q.trim());
@@ -89,6 +101,17 @@ export default function DataTable<T>({ rows, columns, rowKey, search, filters = 
 
   const toggleSort = (key: string) => { setSort((s) => (s?.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })); reset(); };
 
+  const handleRefresh = async (r: T) => {
+    if (!onRefreshRow) return;
+    const k = rowKey(r);
+    setRefreshingKey(k);
+    try {
+      await onRefreshRow(r);
+    } finally {
+      setRefreshingKey((curr) => (curr === k ? null : curr));
+    }
+  };
+
   const csv = () => {
     const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
     const body = filtered.map((r) => columns.map((c) => esc(c.value(r))).join(','));
@@ -96,6 +119,8 @@ export default function DataTable<T>({ rows, columns, rowKey, search, filters = 
     a.href = URL.createObjectURL(new Blob(['\ufeff' + [columns.map((c) => esc(c.header)).join(','), ...body].join('\n')], { type: 'text/csv;charset=utf-8' }));
     a.download = `${exportName ?? 'tabla'}-${new Date().toISOString().slice(0, 10)}.csv`; a.click(); URL.revokeObjectURL(a.href);
   };
+
+  const totalCols = columns.length + (onRefreshRow ? 1 : 0);
 
   return (
     <div className="dt">
@@ -117,13 +142,40 @@ export default function DataTable<T>({ rows, columns, rowKey, search, filters = 
       <div className="tablewrap">
         <table className="table">
           <caption className="visually-hidden">{caption}</caption>
-          <thead><tr>{columns.map((c) => (
-            <th key={c.key} className={c.num ? 'num' : ''} aria-sort={sort?.key === c.key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
-              {c.sortable ? <button className="dt__sort" onClick={() => toggleSort(c.key)}>{c.header}<span aria-hidden="true">{sort?.key === c.key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕'}</span></button> : c.header}
-            </th>))}</tr></thead>
+          <thead>
+            <tr>
+              {columns.map((c) => (
+                <th key={c.key} className={c.num ? 'num' : ''} aria-sort={sort?.key === c.key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+                  {c.sortable ? <button className="dt__sort" onClick={() => toggleSort(c.key)}>{c.header}<span aria-hidden="true">{sort?.key === c.key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ' ↕'}</span></button> : c.header}
+                </th>
+              ))}
+              {onRefreshRow && <th>Actualizar</th>}
+            </tr>
+          </thead>
           <tbody>
-            {slice.map((r) => (<tr key={rowKey(r)}>{columns.map((c) => <td key={c.key} className={c.num ? 'num' : ''}>{c.render ? c.render(r) : c.value(r)}</td>)}</tr>))}
-            {!slice.length && <tr><td colSpan={columns.length} className="muted">{empty}</td></tr>}
+            {slice.map((r) => {
+              const k = rowKey(r);
+              const isRefreshing = refreshingKey === k;
+              return (
+                <tr key={k}>
+                  {columns.map((c) => <td key={c.key} className={c.num ? 'num' : ''}>{c.render ? c.render(r) : c.value(r)}</td>)}
+                  {onRefreshRow && (
+                    <td>
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--small"
+                        disabled={isRefreshing}
+                        onClick={() => void handleRefresh(r)}
+                        title="Consultar nuevamente este registro en la API municipal"
+                      >
+                        {isRefreshing ? 'Actualizando…' : 'Actualizar'}
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+            {!slice.length && <tr><td colSpan={totalCols} className="muted">{empty}</td></tr>}
           </tbody>
         </table>
       </div>
