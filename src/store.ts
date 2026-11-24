@@ -171,4 +171,3 @@ export async function upsertPermit(p: Permit) {
   if (p.source === 'api') await saveCachedPermits([p]).catch(() => {});
   set({ permits: [...state.permits.filter((x) => x.numeroArriendo !== p.numeroArriendo && x.source !== 'demo'), p] });
 }
-```[cite: 18, 20]
